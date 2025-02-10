@@ -7,8 +7,8 @@ import urllib
 
 JELLYFIN_API_URL = os.getenv("JELLYFIN_API_URL")
 JELLYFIN_API_TOKEN = os.getenv("JELLYFIN_API_TOKEN")
-EPISODE_START_INTERVAL = float(os.getenv("EPISODE_START_INTERVAL"))
-EPISODE_COUNT = float(os.getenv("EPISODE_COUNT"))
+MAXIMUM_PLAYTIME_ALLOWED = float(os.getenv("MAXIMUM_PLAYTIME_ALLOWED", 120))  # in minutes
+CONFIRMATION_TIMEOUT = 60  # Time in seconds to wait for user confirmation
 
 app = Flask(__name__)
 
@@ -40,43 +40,53 @@ def webhook():
         # Store session object with nullable fields
         session = {
             "NotificationUsername": event.get("NotificationUsername", None),
-            "Id": event.get("Id", None), #T The ID of the session to stop
+            "Id": event.get("Id", None),  # The ID of the session to stop
             "DeviceName": event.get("DeviceName", None),
             "RemoteEndPoint": event.get("RemoteEndPoint", None)
         }
 
-        # Check if this is a "PlaybackStart" event for an episode
-        if notification_type == "PlaybackStart" and item_type == "Episode":
-            key = f"{user_id}-{device_id}"
+        key = f"{user_id}-{device_id}"
+
+        if notification_type == "PlaybackStart":
+            if key not in playback_tracker:
+                playback_tracker[key] = {
+                    "start_time": time.time(),
+                    "last_activity": time.time(),
+                    "confirmation_sent": False
+                }
+            else:
+                # If confirmation was sent and user resumes playback, confirm they are still watching
+                if playback_tracker[key]["confirmation_sent"]:
+                    display_message(session['Id'], "Confirmed Still Watching", "Confirmation", 5000)
+                    playback_tracker[key]["confirmation_sent"] = False
+                    playback_tracker[key]["start_time"] = time.time()  # Reset the timer
+
+                playback_tracker[key]["last_activity"] = time.time()
 
             print(f"ℹ️ PlaybackStart event received from user: {session.get('NotificationUsername', 'Unknown')}\n🌐 Device Address: {session.get('RemoteEndPoint', 'Unknown')}")
 
-            if key not in playback_tracker:
-                playback_tracker[key] = {
-                    "count": 0,
-                    "last_play_time": time.time()
-                }
+        elif notification_type == "PlaybackStop":
+            if key in playback_tracker:
+                del playback_tracker[key]
+                print(f"ℹ️ PlaybackStop event received from user: {session.get('NotificationUsername', 'Unknown')}\n🌐 Device Address: {session.get('RemoteEndPoint', 'Unknown')}")
 
-            tracker = playback_tracker[key]
-            time_since_last_play = time.time() - tracker["last_play_time"]
-
-            # Reset the count if playback events are far apart (e.g., > 1 hour)
-            if time_since_last_play > (60 * EPISODE_START_INTERVAL):
-                tracker["count"] = 0
-
-            # Increment the playback count
-            tracker["count"] += 1
-            tracker["last_play_time"] = time.time()
-
-            print(f"ℹ️ {session.get('NotificationUsername', 'Unknown')} has played {tracker['count']} episodes in a row.")
-
-            # If more than 4 episodes have been played, stop playback
-            if tracker["count"] > (EPISODE_COUNT - 1):
-                if stop_playback(session):
-                    tracker["count"] = 0
-                    return jsonify({"message": "Playback stopped due to autoplay limit"}), 200
+        # Check if the maximum playtime has been exceeded
+        if key in playback_tracker:
+            elapsed_time = (time.time() - playback_tracker[key]["start_time"]) / 60  # Convert to minutes
+            if elapsed_time >= MAXIMUM_PLAYTIME_ALLOWED:
+                if not playback_tracker[key]["confirmation_sent"]:
+                    # Send "Are you still watching?" message
+                    display_message(session['Id'], "Are you still watching?", "Confirmation", CONFIRMATION_TIMEOUT * 1000)
+                    playback_tracker[key]["confirmation_sent"] = True
+                    playback_tracker[key]["confirmation_time"] = time.time()
                 else:
-                    return jsonify({"message": "Failed to stop playback"}), 500
+                    # Check if the confirmation timeout has passed
+                    if time.time() - playback_tracker[key]["confirmation_time"] > CONFIRMATION_TIMEOUT:
+                        if stop_playback(session):
+                            del playback_tracker[key]
+                            return jsonify({"message": "Playback stopped due to inactivity"}), 200
+                        else:
+                            return jsonify({"message": "Failed to stop playback"}), 500
 
     except Exception as e:
         print("Error processing webhook:", e)
@@ -89,7 +99,6 @@ def stop_playback(session):
     """
     Stop playback for a given session ID using the Jellyfin API.
     """
-
     session_id = session['Id']
     display_message(session_id, 'Stopping Playback', 'Sleep Timer', 7000)
 
@@ -101,7 +110,7 @@ def stop_playback(session):
         
         # Send the request to stop playback
         req = urllib.request.urlopen(urllib.request.Request(stop_url, method="POST"))
-        print(f"👤 {session.get('NotificationUsername', 'Unknown')} has played {int(EPISODE_COUNT)} episodes in a row.\n❗️ ⏹️ Stopping Playback ❗️\n🌐 Device Address: {session.get('RemoteEndPoint', 'Unknown')}")
+        print(f"👤 {session.get('NotificationUsername', 'Unknown')} has exceeded the maximum playtime.\n❗️ ⏹️ Stopping Playback ❗️\n🌐 Device Address: {session.get('RemoteEndPoint', 'Unknown')}")
         print()
 
         # Wait for 2 seconds before sending the next command
@@ -128,7 +137,6 @@ def display_message(session_id, message, header="Notice", timeout_ms=5000):
         header (str): The header for the message.
         timeout_ms (int): Time in milliseconds to display the message.
     """
-
     try:
         # Construct the URL for the DisplayMessage command
         display_message_url = f"{JELLYFIN_API_URL}/Sessions/{session_id}/Command"
@@ -151,8 +159,6 @@ def display_message(session_id, message, header="Notice", timeout_ms=5000):
 
     except Exception as e:
         print(f"Error sending display message to session {session_id}: {e}")
-
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5553)
