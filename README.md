@@ -32,8 +32,8 @@ services:
 
       MAXIMUM_PLAYTIME_ALLOWED: 120 # Required. Timeout after 2 hours. Number of minutes after user is notified with "Are you watching?" and will stop from next media to play.
 
-      MOVIES_ONLY=False # Required. Rule applies to Movies or Episodes? Both False = applies to both.
-      EPISODES_ONLY=True
+      MOVIES_ONLY: False # Required. Rule applies to Movies or Episodes? Both False = applies to both.
+      EPISODES_ONLY: True
 
     restart: unless-stopped
 ```
