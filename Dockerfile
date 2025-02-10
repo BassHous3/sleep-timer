@@ -21,9 +21,10 @@ EXPOSE 5553
 
 # Copy the .env file into the container
 #COPY .env .env
-ENV EPISODE_START_INTERVAL=60
-ENV EPISODE_COUNT=4
-ENV PYTHONUNBUFFERED=1
+ENV MOVIES_ONLY=False
+ENV EPISODES_ONLY=True
+ENV CONFIRMATION_TIMEOUT=60
+ENV MAXIMUM_PLAYTIME_ALLOWED=120
 
 # Run app.py when the container launches
 CMD ["gunicorn", "-b", "0.0.0.0:5553", "--access-logfile", "-", "app:app"]
