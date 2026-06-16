@@ -4,6 +4,7 @@ import time
 import json
 import requests
 import urllib
+import threading
 
 JELLYFIN_API_URL = os.getenv("JELLYFIN_API_URL")
 JELLYFIN_API_TOKEN = os.getenv("JELLYFIN_API_TOKEN")
@@ -74,7 +75,6 @@ def webhook():
                 tracker["last_item_id"] != item_id and
                 time_since_last_play < (EPISODE_SKIMMING_DURATION * 60)):
                 print(f"⏩ Skimming detected!")
-                time.sleep(1)
                 print(f"⏩ Count skipped, {session.get('NotificationUsername', 'Unknown')} still has played only {tracker['count']} episodes in a row.")
                 tracker["last_play_time"] = now
                 tracker["last_item_id"] = item_id
@@ -101,11 +101,11 @@ def webhook():
 
             # If more than 4 episodes have been played, stop playback
             if tracker["count"] > (EPISODE_COUNT - 1):
-                if stop_playback(session):
-                    tracker["count"] = 0
-                    return jsonify({"message": "Playback stopped due to autoplay limit"}), 200
-                else:
-                    return jsonify({"message": "Failed to stop playback"}), 500
+                tracker["count"] = 0
+                thread = threading.Thread(target=stop_playback, args=(session,))
+                thread.daemon = True
+                thread.start()
+                return jsonify({"message": "Playback stop initiated"}), 200
 
     except Exception as e:
         print("Error processing webhook:", e)
